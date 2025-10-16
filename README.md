@@ -4,7 +4,7 @@ An intelligent lighting system that automatically adjusts color temperature and 
 
 ## Features
 
-- **Dynamic Color Temperature**: Smoothly transitions from warm (2700K) to cool (4000K) based on sun elevation using a sine curve for natural transitions
+- **Dynamic Color Temperature**: Smoothly transitions from warm (2700K) to cool (4000K) based on sun elevation using mired-based interpolation for perceptually uniform color transitions
 - **Smart Brightness Control**: Adjusts brightness based on multiple conditions with priority-based logic
 - **Sunrise/Sunset Awareness**: Special handling for dawn and dusk transitions
 - **Ambient Light Detection**: Responds to low light conditions during the day
@@ -36,17 +36,24 @@ template:
           {# When sun is below horizon, use warm temperature #}
           {% if elevation <= 0 %}
             {{ min_kelvin }}
-          {# When sun is above horizon, scale from min to max using sine curve #}
+          {# When sun is above horizon, interpolate in mired space for perceptually uniform transitions #}
           {% else %}
+            {# Convert Kelvin to mireds (note: inverted - higher K = lower mired) #}
+            {% set min_mired = 1000000 / max_kelvin %}
+            {% set max_mired = 1000000 / min_kelvin %}
+            
             {# Normalize elevation to 0-1 range (assuming max useful elevation is 60°) #}
             {% set max_elevation = 60 %}
             {% set normalized = (elevation / max_elevation) | float %}
             {% set normalized = 1.0 if normalized > 1.0 else normalized %}
             
-            {# Use sine curve for smoother transition #}
-            {% set kelvin_range = max_kelvin - min_kelvin %}
+            {# Use sine curve for smoother transition in mired space #}
+            {% set mired_range = max_mired - min_mired %}
             {% set sine_value = sin(normalized * 1.5708) %} {# 1.5708 = π/2 #}
-            {% set kelvin = min_kelvin + (sine_value * kelvin_range) %}
+            {% set mired = min_mired + (sine_value * mired_range) %}
+            
+            {# Convert back to Kelvin #}
+            {% set kelvin = 1000000 / mired %}
             {{ kelvin | round(0) }}
           {% endif %}
       
@@ -105,8 +112,12 @@ Check that the following sensors are available:
 | Sun Position | Color Temperature | Notes |
 |-------------|-------------------|-------|
 | Below horizon (≤0°) | 2700K | Warm white |
-| 0° to 60° elevation | 2700K → 4000K | Smooth sine curve transition |
+| 0° to 60° elevation | 2700K → 4000K | Mired-based interpolation with sine curve for perceptually uniform transitions |
 | Above 60° elevation | 4000K | Cool daylight |
+
+**Why Mired-Based Interpolation?** 
+
+Equally-spaced mired values provide better perceptual uniformity than equally-spaced Kelvin values. This means color transitions feel more natural and consistent throughout the day. The calculation interpolates in mired space (reciprocal of Kelvin) and converts back to Kelvin for device compatibility.
 
 ### Brightness Behavior (Priority Order)
 
@@ -158,6 +169,8 @@ script:
 ```
 
 ### Continuous Adaptive Lighting Automation
+
+This automation keeps lights updated as the adaptive values change throughout the day:
 
 ```yaml
 automation:
@@ -234,13 +247,47 @@ Current brightness levels:
 - Check that the light entity supports both `brightness_pct` and `color_temp_kelvin`
 - Review automation traces in Home Assistant for errors
 
+## Advanced Features
+
+### Alternative Color Temperature Calculation
+
+If you prefer to output mireds directly (some lights accept `color_temp` in mireds), use this alternative sensor:
+
+```yaml
+- name: "Adaptive Light Temperature Mireds"
+  unique_id: adaptive_light_temperature_mireds
+  unit_of_measurement: "mired"
+  state: >
+    {% set elevation = state_attr('sun.sun', 'elevation') | float %}
+    {% set min_kelvin = 2700 %}
+    {% set max_kelvin = 4000 %}
+    {% set min_mired = 1000000 / max_kelvin %}
+    {% set max_mired = 1000000 / min_kelvin %}
+    {% if elevation <= 0 %}
+      {{ max_mired | round(0) }}
+    {% else %}
+      {% set max_elevation = 60 %}
+      {% set normalized = (elevation / max_elevation) | float %}
+      {% set normalized = 1.0 if normalized > 1.0 else normalized %}
+      {% set sine_value = sin(normalized * 1.5708) %}
+      {% set mired = min_mired + (sine_value * (max_mired - min_mired)) %}
+      {{ mired | round(0) }}
+    {% endif %}
+```
+
+Then use in automations with:
+```yaml
+color_temp: "{{ states('sensor.adaptive_light_temperature_mireds') | int }}"
+```
+
 ## Contributing
 
 Feel free to modify and adapt this configuration to your needs. Common improvements:
 - Add different brightness profiles for different rooms
-- Create scenes based on time of day
-- Integrate with presence detection
+- Integrate with presence detection for automatic on/off
 - Add manual override switches
+- Create dashboard cards for easy control
+- Adjust timing and thresholds to match your daily routine
 
 ## License
 
